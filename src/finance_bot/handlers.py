@@ -125,7 +125,7 @@ def create_router(service: FinanceService, settings: Settings) -> Router:
         else:
             await message.answer(format_report(summary), reply_markup=report_keyboard("week"))
 
-        @router.message(Command("table"))
+    @router.message(Command("table"))
     async def table(message: Message, bot: Bot) -> None:
         progress = await message.answer("Генерую таблицю…")
         try:
@@ -146,7 +146,7 @@ def create_router(service: FinanceService, settings: Settings) -> Router:
                 await progress.edit_text("Не вдалося згенерувати таблицю. Спробуй трохи пізніше.")
             except Exception:
                 pass
-
+                
     @router.message(Command("categories"))
     async def categories(message: Message, state: FSMContext) -> None:
         await state.clear()
