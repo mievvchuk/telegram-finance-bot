@@ -5,7 +5,7 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 
 WORKDIR /build
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml ./
 COPY src ./src
 
 RUN python -m pip install --upgrade pip \
