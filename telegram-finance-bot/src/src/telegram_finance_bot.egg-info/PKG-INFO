@@ -1,0 +1,266 @@
+Metadata-Version: 2.4
+Name: telegram-finance-bot
+Version: 0.1.0
+Summary: Telegram bot for frictionless personal finance tracking in Google Sheets
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: aiogram==3.29.1
+Requires-Dist: zai-sdk==0.2.3
+Requires-Dist: gspread==6.2.1
+Requires-Dist: pydantic<3,>=2.11
+Requires-Dist: pydantic-settings<3,>=2.10
+Requires-Dist: python-dotenv<2,>=1.1
+Requires-Dist: tzdata
+Provides-Extra: dev
+Requires-Dist: pytest<9,>=8.4; extra == "dev"
+Requires-Dist: pytest-asyncio<2,>=1.1; extra == "dev"
+Requires-Dist: ruff<1,>=0.12; extra == "dev"
+
+# Telegram Finance Bot
+
+Telegram-бот для персонального фінансового обліку з мінімальним тертям: напишіть
+`кава 50 грн` або надішліть фото чека, підтвердьте розпізнані дані — і операція
+з'явиться у вашій Google Таблиці. GLM розпізнає суму, валюту, тип, категорію,
+опис і дату; окремий OCR-сервіс не потрібен.
+
+## Що є в MVP
+
+- текст і фото чека проходять один пайплайн: розпізнавання → попередній перегляд →
+  підтвердження або скасування → запис у Google Sheets;
+- категорію можна змінити inline-кнопкою до запису;
+- за низької впевненості бот просить ввести суму вручну;
+- попередження про схожу операцію протягом короткого проміжку часу;
+- `/report` формує підсумок за тиждень або місяць у розрізі категорій і показує
+  дохід, витрати та баланс;
+- `/undo` видаляє останню підтверджену операцію;
+- прив'язка Telegram-користувача до окремої таблиці через `/connect` зберігається
+  в локальному SQLite.
+
+Таблиця операцій має колонки:
+
+| Дата | Час | Тип | Сума | Валюта | Категорія | Опис | Джерело |
+|---|---|---|---:|---|---|---|---|
+| 2026-07-10 | 14:32 | витрата | 50 | UAH | Кафе/ресторани | кава | текст |
+
+## Передумови
+
+- Python 3.11 або новіший;
+- Telegram-бот і його token;
+- BigModel / Zhipu AI API key з доступом до GLM-моделей;
+- Google Cloud service account з увімкненими Google Sheets API та Google Drive API;
+- Google Таблиця, відкрита для `client_email` цього service account з правом
+  **Editor / Редактор**.
+
+## 1. Telegram і BigModel
+
+1. Відкрийте [@BotFather](https://t.me/BotFather), виконайте `/newbot` і скопіюйте
+   token у `TELEGRAM_BOT_TOKEN`.
+2. Створіть API key на [BigModel Open Platform](https://open.bigmodel.cn/) і задайте
+   `ZAI_API_KEY`.
+3. Типово бот використовує безкоштовні `glm-4.7-flash` для тексту та
+   `glm-4.6v-flash` для фото чеків. За потреби їх можна замінити через
+   `ZAI_TEXT_MODEL` і `ZAI_VISION_MODEL`.
+
+## 2. Google Cloud і таблиця
+
+1. У [Google Cloud Console](https://console.cloud.google.com/) створіть або виберіть
+   проєкт.
+2. У **APIs & Services → Library** увімкніть **Google Sheets API** і
+   **Google Drive API**.
+3. У **IAM & Admin → Service Accounts** створіть service account. Користувацька
+   OAuth-згода для цього сценарію не потрібна.
+4. На вкладці **Keys** створіть JSON key і збережіть файл поза Git, наприклад
+   `secrets/google-service-account.json`.
+5. Створіть порожню Google Таблицю. Натисніть **Share / Поділитися**, вставте
+   значення `client_email` з JSON-файлу та надайте роль **Editor / Редактор**.
+
+Credentials можна передати рівно одним способом:
+
+- `GOOGLE_SERVICE_ACCOUNT_FILE` — шлях до JSON-файлу, рекомендовано локально;
+- `GOOGLE_SERVICE_ACCOUNT_JSON` — повний JSON одним секретом;
+- `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64` — base64 від байтів JSON-файлу,
+  рекомендовано в Railway/Fly.io.
+
+Не вставляйте service-account key у код, issue, лог або саму таблицю і ніколи не
+комітьте його в Git.
+
+## 3. Локальний запуск
+
+```bash
+python -m venv .venv
+```
+
+Активуйте середовище:
+
+```bash
+# Linux/macOS
+source .venv/bin/activate
+
+# PowerShell
+.venv\Scripts\Activate.ps1
+```
+
+Встановіть застосунок, створіть конфігурацію і каталог даних:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+cp .env.example .env        # PowerShell: Copy-Item .env.example .env
+mkdir data                  # PowerShell: New-Item -ItemType Directory -Force data
+```
+
+Заповніть `.env`. Мінімально потрібні `TELEGRAM_BOT_TOKEN`,
+`ZAI_API_KEY` і один із трьох Google credential-параметрів. Потім запустіть:
+
+```bash
+finance-bot
+```
+
+Альтернатива без console entry point:
+
+```bash
+python -m finance_bot.main
+```
+
+### Docker Compose
+
+Для Compose покладіть ключ у `secrets/google-service-account.json`, залиште
+`GOOGLE_SERVICE_ACCOUNT_FILE=./secrets/google-service-account.json` у `.env` та
+виконайте:
+
+```bash
+docker compose up --build -d
+docker compose logs -f bot
+```
+
+SQLite зберігається у `./data`, а ключ монтується в контейнер лише для читання.
+
+## 4. Підключення таблиці
+
+1. Напишіть боту `/start`.
+2. Надішліть `/connect <URL або ID таблиці>`, наприклад:
+
+   ```text
+   /connect https://docs.google.com/spreadsheets/d/1AbCdEf.../edit
+   ```
+
+3. Бот перевірить доступ service account, підготує аркуш із назвою з
+   `TRANSACTIONS_WORKSHEET` (типово `Операції`) та збереже прив'язку в SQLite.
+4. Надішліть `кава 50 грн`, натисніть **✅ Все вірно** і перевірте новий рядок.
+
+Якщо `DEFAULT_GOOGLE_SHEET_ID` задано, ця таблиця використовується як запасна до
+персонального `/connect`. URL може бути повним; ID — це фрагмент між `/d/` і
+`/edit` у посиланні Google Sheets.
+
+## Команди
+
+- `/start` — короткий онбординг і стан підключення;
+- `/connect <URL або ID>` — підключити або замінити Google Таблицю;
+- `/report` — вибрати тиждень або місяць і отримати підсумок;
+- `/categories` — переглянути, додати, перейменувати або видалити категорії;
+- `/undo` — видалити останній запис користувача;
+- `/cancel` — скасувати поточне уточнення або чернетку.
+
+Основний ввід не потребує команд, меню чи форм. Для фото надсилайте оригінал або
+чітке зображення, на якому видно підсумкову суму; ліміт задає `MAX_IMAGE_BYTES`.
+
+## Налаштування середовища
+
+| Змінна | Призначення | Типове значення |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Bot token від BotFather | обов'язково |
+| `ZAI_API_KEY` | BigModel / Zhipu AI API key | обов'язково |
+| `ZAI_BASE_URL` | API endpoint BigModel | `https://open.bigmodel.cn/api/paas/v4/` |
+| `ZAI_TEXT_MODEL` | Модель для текстових повідомлень | `glm-4.7-flash` |
+| `ZAI_VISION_MODEL` | Vision-модель для чеків | `glm-4.6v-flash` |
+| `ZAI_TIMEOUT_SECONDS` | Таймаут одного GLM-запиту | `45` |
+| `GOOGLE_SERVICE_ACCOUNT_FILE` | Шлях до service-account JSON | — |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Service-account JSON одним рядком | — |
+| `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64` | JSON, закодований у base64 | — |
+| `DEFAULT_GOOGLE_SHEET_ID` | Необов'язкова таблиця за замовчуванням | — |
+| `TRANSACTIONS_WORKSHEET` | Назва аркуша операцій | `Операції` |
+| `DATABASE_PATH` | Шлях до SQLite | `./data/finance_bot.sqlite3` |
+| `APP_TIMEZONE` | Часовий пояс дат і звітів | `Europe/Kyiv` |
+| `ALLOWED_TELEGRAM_USER_IDS` | Allowlist Telegram ID через кому | порожньо = усі |
+| `DRAFT_TTL_SECONDS` | Час життя непідтвердженої операції | `900` |
+| `DUPLICATE_WINDOW_SECONDS` | Вікно пошуку можливого дубля | `30` |
+| `MAX_IMAGE_BYTES` | Максимальний розмір завантаженого фото | `5242880` |
+| `LOG_LEVEL` | Рівень логування | `INFO` |
+
+Для приватного бота варто обов'язково задати `ALLOWED_TELEGRAM_USER_IDS`, наприклад
+`123456789,987654321`. Свій numeric ID можна отримати через службового Telegram-бота
+або з `message.from_user.id` у тимчасовому debug-лозі; після цього debug-лог вимкніть.
+
+## Перевірки
+
+```bash
+ruff check .
+pytest
+```
+
+Unit-тести не повинні звертатися до реальних Telegram, BigModel або Google API.
+Для ручного наскрізного smoke-тесту:
+
+1. запустіть бота і виконайте `/connect`;
+2. перевірте текст `кава 50 грн` і підтвердіть операцію;
+3. надішліть чітке фото чека і підтвердьте;
+4. виконайте `/report`, потім `/undo`;
+5. звірте рядки й підсумки безпосередньо у Google Таблиці.
+
+Після налаштування service account окремий безпечний тест Sheets API додає
+маркерний рядок, читає його й одразу видаляє:
+
+```bash
+python scripts/google_sheets_smoke.py
+```
+
+Для цього розгортання підготовлено реальну
+[тестову Google Таблицю](https://docs.google.com/spreadsheets/d/19PLZOdZL6phazOsQtWmpU-XqbEchWkESW09Hd8pYdwA/edit)
+з аркушем `Операції`, канонічним header і прихованими технічними колонками.
+Її ID уже заданий у локальному `.env`, але не в `.env.example` і не в коді.
+
+Створення та перевірка структури таблиці виконані через авторизований Google Drive.
+Щоб чесно підтвердити запис саме запущеним ботом через `gspread`, таблицю ще треба
+поширити на `client_email` з вашого service-account JSON, додати credentials у `.env`
+і виконати наведений smoke-тест. Без service-account key цей останній крок неможливо
+імітувати або вважати успішним.
+
+## Розгортання
+
+### Railway
+
+1. Підключіть Git-репозиторій до нового Railway service. `railway.json` і
+   `Dockerfile` будуть використані автоматично.
+2. Додайте всі обов'язкові змінні в **Variables**. Для Google key найзручніше
+   використати `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64`; не задавайте одночасно
+   `GOOGLE_SERVICE_ACCOUNT_FILE`.
+3. Додайте persistent volume і змонтуйте його в `/app/data`, потім задайте
+   `DATABASE_PATH=/app/data/finance_bot.sqlite3`.
+4. Запустіть рівно **одну репліку**: Telegram long polling не можна паралельно
+   вести кількома екземплярами з одним token.
+
+### VPS / Fly.io
+
+Зберіть `Dockerfile`, передайте secrets через secret manager платформи, змонтуйте
+постійний том у `/app/data` і запустіть одну репліку командою `finance-bot`.
+Відкривати HTTP-порт не потрібно: MVP працює через Telegram long polling.
+
+## Приватність і безпека
+
+- текст операцій і фото чеків надсилаються Telegram, далі BigModel / Zhipu AI для
+  розпізнавання, а підтверджені структуровані дані — Google Sheets;
+- не надсилайте чеки з даними, які не готові передати цим провайдерам; окремо
+  перевірте їхні актуальні умови зберігання даних для вашого регіону;
+- бот не повинен логувати token, API key, service-account JSON, повний текст чека
+  або байти фото;
+- обмежте доступ через `ALLOWED_TELEGRAM_USER_IDS`, регулярно ротатуйте ключі та
+  надавайте service account доступ тільки до потрібних таблиць;
+- `.env`, `secrets/`, SQLite і runtime-дані виключені з Git. Для production
+  використовуйте secret manager і зашифровані резервні копії persistent volume.
+
+## Межі MVP
+
+Конвертація валют, бюджети й ліміти, сімейні простори, голосові повідомлення,
+експорт у CSV/Excel та автоматичне розбиття чека на окремі товари не входять до
+першої версії. Розпізнавання LLM може помилятися, тому операція записується тільки
+після явного підтвердження користувача.
