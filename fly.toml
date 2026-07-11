@@ -1,0 +1,20 @@
+app = "telegram-finance-bot-restless-pebble-8237"
+primary_region = "waw"
+
+[build]
+
+[env]
+  DATABASE_PATH = "/app/data/finance_bot.sqlite3"
+  PYTHONUNBUFFERED = "1"
+
+[experimental]
+  auto_rollback = true
+
+[mounts]
+  source = "data"
+  destination = "/app/data"
+
+[vm]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1

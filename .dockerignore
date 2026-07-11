@@ -1,0 +1,17 @@
+.git
+.gitignore
+.env
+*.egg-info
+__pycache__
+*.pyc
+*.pyo
+data/
+*.sqlite3
+.pytest_cache
+.ruff_cache
+fly.toml
+railway.json
+docker-compose.yml
+.vscode
+.idea
+*.log

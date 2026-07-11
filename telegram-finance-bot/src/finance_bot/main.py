@@ -15,7 +15,27 @@ from .handlers import create_router
 from .middleware import AccessMiddleware
 from .parser import GlmFinanceParser
 from .service import FinanceService
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    """Minimal HTTP server so Fly.io health checks pass."""
+
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def log_message(self, format, *args) -> None:  # noqa: A002
+        pass  # silence request logs
+
+
+def _start_health_server(port: int = 8080) -> None:
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    
 logger = logging.getLogger(__name__)
 
 
