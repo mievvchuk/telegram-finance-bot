@@ -125,7 +125,7 @@ def create_router(service: FinanceService, settings: Settings) -> Router:
         else:
             await message.answer(format_report(summary), reply_markup=report_keyboard("week"))
 
-    @router.message(Command("table"))
+        @router.message(Command("table"))
     async def table(message: Message, bot: Bot) -> None:
         progress = await message.answer("Генерую таблицю…")
         try:
@@ -133,16 +133,19 @@ def create_router(service: FinanceService, settings: Settings) -> Router:
             png_bytes = generate_table_image_from_bytes(
                 transactions, period="week", start=start, end=end
             )
-            await progress.delete()
             await bot.send_photo(
                 message.chat.id,
                 photo=png_bytes,
                 caption="Таблиця за цей тиждень",
                 reply_markup=_table_keyboard("week"),
             )
+            await progress.delete()
         except Exception:
             logger.exception("Could not generate table", extra={"user_id": _user_id(message)})
-            await progress.edit_text("Не вдалося згенерувати таблицю. Спробуй трохи пізніше.")
+            try:
+                await progress.edit_text("Не вдалося згенерувати таблицю. Спробуй трохи пізніше.")
+            except Exception:
+                pass
 
     @router.message(Command("categories"))
     async def categories(message: Message, state: FSMContext) -> None:
