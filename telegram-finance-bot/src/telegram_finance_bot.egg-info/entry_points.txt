@@ -1,2 +1,0 @@
-[console_scripts]
-finance-bot = finance_bot.main:cli

@@ -12,17 +12,16 @@ from pydantic import ValidationError
 from zai import ZhipuAiClient
 
 from .domain import (
-    Confidence,
     DEFAULT_EXPENSE_CATEGORIES,
     DEFAULT_INCOME_CATEGORIES,
+    Confidence,
+    ParsedItem,
     ParseEnvelope,
     ParseStatus,
-    ParsedItem,
     TransactionType,
 )
 from .errors import FinancialParseError, ImageFormatError
 from .prompts import build_system_prompt
-
 
 PARSE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -353,4 +352,4 @@ def _normalize_categories_and_dates(
     return envelope.model_copy(update={"items": items})
 
 
-__all__ = ["GlmFinanceParser", "PARSE_SCHEMA"]
+__all__ = ["PARSE_SCHEMA", "GlmFinanceParser"]

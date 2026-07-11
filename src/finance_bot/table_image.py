@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal
 from typing import Literal
@@ -12,12 +13,28 @@ from .domain import Transaction, TransactionType
 PeriodLabel = Literal["week", "month"]
 
 _CURRENCY_SYMBOL: dict[str, str] = {"UAH": "грн", "USD": "$", "EUR": "€"}
+_CURRENCY_ORDER = {"UAH": 0, "USD": 1, "EUR": 2}
 
 
 def _fmt_amount(amount: Decimal, currency: str) -> str:
     n = amount.quantize(Decimal("0.01"))
-    text = f"{n:,.2f}".replace(",", " ") if n != n.to_integral() else f"{n:,.0f}".replace(",", " ")
+    text = (
+        f"{n:,.2f}".replace(",", " ")
+        if n != n.to_integral()
+        else f"{n:,.0f}".replace(",", " ")
+    )
     return f"{text} {_CURRENCY_SYMBOL.get(currency, currency)}"
+
+
+def _fmt_totals(
+    totals: dict[str, Decimal], currencies: list[str], *, signed: bool = False
+) -> str:
+    parts: list[str] = []
+    for currency in currencies:
+        amount = totals.get(currency, Decimal("0"))
+        prefix = "+" if signed and amount >= 0 else ""
+        parts.append(prefix + _fmt_amount(amount, currency))
+    return " / ".join(parts)
 
 
 def generate_table_image(
@@ -31,8 +48,8 @@ def generate_table_image(
 
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
     import matplotlib.font_manager as fm
+    import matplotlib.pyplot as plt
 
     # --- Font setup (works on Linux/Windows/macOS) ---
     _register_fonts(fm)
@@ -50,6 +67,16 @@ def generate_table_image(
     # Truncate to 30 rows for readability
     display_tx = sorted_tx[:30]
     truncated = len(sorted_tx) - 30
+
+    income_totals: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    expense_totals: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    for transaction in sorted_tx:
+        target = income_totals if transaction.type == TransactionType.INCOME else expense_totals
+        target[transaction.currency.value] += transaction.amount
+    currencies = sorted(
+        {transaction.currency.value for transaction in sorted_tx},
+        key=lambda currency: _CURRENCY_ORDER.get(currency, len(_CURRENCY_ORDER)),
+    )
 
     # --- Build figure ---
     n_rows = len(display_tx) + 1  # +1 for header
@@ -112,7 +139,7 @@ def generate_table_image(
 
     # --- Draw header row ---
     header_y = table_top
-    for i, (header, x) in enumerate(zip(headers, col_x)):
+    for i, (header, x) in enumerate(zip(headers, col_x, strict=True)):
         w = col_widths[i]
         rect = plt.Rectangle(
             (x, header_y - cell_h), w, cell_h,
@@ -132,9 +159,6 @@ def generate_table_image(
         )
 
     # --- Draw data rows ---
-    total_income = Decimal("0")
-    total_expense = Decimal("0")
-
     for row_idx, tx in enumerate(display_tx):
         y = header_y - cell_h * (row_idx + 1)
         is_income = tx.type == TransactionType.INCOME
@@ -143,14 +167,9 @@ def generate_table_image(
             # Slightly darken alternating rows
             row_bg = ROW_ALT if not is_income else "#1a3530"
 
-        if is_income:
-            total_income += tx.amount
-        else:
-            total_expense += tx.amount
-
         values = [
-            tx.occurred_at.astimezone(None).strftime("%d.%m.%Y"),
-            tx.occurred_at.astimezone(None).strftime("%H:%M"),
+            tx.occurred_at.strftime("%d.%m.%Y"),
+            tx.occurred_at.strftime("%H:%M"),
             "Дохід" if is_income else "Витрата",
             _fmt_amount(tx.amount, tx.currency.value),
             tx.currency.value,
@@ -160,7 +179,7 @@ def generate_table_image(
 
         text_color = INCOME_TEXT if is_income else EXPENSE_TEXT
 
-        for col_idx, (val, x) in enumerate(zip(values, col_x)):
+        for col_idx, (val, x) in enumerate(zip(values, col_x, strict=True)):
             w = col_widths[col_idx]
             rect = plt.Rectangle(
                 (x, y - cell_h), w, cell_h,
@@ -182,61 +201,25 @@ def generate_table_image(
             )
 
     # --- Summary row ---
-    summary_y = header_y - cell_h * (len(display_tx) + 1)
-    balance = total_income - total_expense
-    balance_sign = "+" if balance >= 0 else ""
+    balance_totals = {
+        currency: income_totals[currency] - expense_totals[currency]
+        for currency in currencies
+    }
+    income_text = f"Доходи: {_fmt_totals(income_totals, currencies)}"
+    expense_text = f"Витрати: {_fmt_totals(expense_totals, currencies)}"
+    balance_text = f"Баланс: {_fmt_totals(balance_totals, currencies, signed=True)}"
+    if all(value >= 0 for value in balance_totals.values()):
+        balance_color = INCOME_TEXT
+    elif all(value <= 0 for value in balance_totals.values()):
+        balance_color = EXPENSE_TEXT
+    else:
+        balance_color = HEADER_TEXT
 
-    # Income summary
-    for col_idx, (val, x) in enumerate([
-        ("", ""),
-        ("", ""),
-        ("", ""),
-        (f"+{_fmt_amount(total_income, 'UAH')}" if not any(t.currency.value != "UAH" for t in display_tx) else f"+{total_income:,.2f}", ""),
-        ("", ""),
-        ("РАЗОМ ДОХІД", ""),
-        ("", ""),
-    ]):
-        pass  # We'll draw a simpler summary
-
-    # Draw two summary cells: income and expense
-    sum_cell_h = cell_h * 0.9
-
-    # Income cell
-    income_text = f"Доходи: {_fmt_amount(total_income, 'UAH')}"
-    expense_text = f"Витрати: {_fmt_amount(total_expense, 'UAH')}"
-    balance_text = f"Баланс: {balance_sign}{_fmt_amount(abs(balance), 'UAH')}"
-    balance_color = INCOME_TEXT if balance >= 0 else EXPENSE_TEXT
-
-    summary_y_start = summary_y - 0.005
-    for label, value, color in [
-        (income_text, None, INCOME_TEXT),
-        (expense_text, None, EXPENSE_TEXT),
-        (balance_text, None, balance_color),
-    ]:
-        y_pos = summary_y_start - sum_cell_h * 0.33
-        rect = plt.Rectangle(
-            (0, summary_y_start - sum_cell_h), 1.0, sum_cell_h,
-            transform=ax.transAxes,
-            facecolor=SUMMARY_BG, edgecolor=BORDER_COLOR, linewidth=0.5,
-            clip_on=False,
-        )
-        ax.add_patch(rect)
-        ax.text(
-            0.03, y_pos - 0.002,
-            label,
-            ha="left", va="center",
-            fontsize=10, fontweight="bold",
-            color=color,
-            fontfamily=font_family,
-            transform=ax.transAxes,
-        )
-        summary_y_start -= sum_cell_h * 0.33
-        break  # Draw only one background rect
-
-    # Draw all three summary texts
-    sy = header_y - cell_h * (len(display_tx) + 0.5)
+    summary_top = header_y - cell_h * (len(display_tx) + 1)
+    summary_height = cell_h * 1.1
+    summary_center = summary_top - summary_height / 2
     rect = plt.Rectangle(
-        (0, sy - cell_h * 1.1), 1.0, cell_h * 1.1,
+        (0, summary_top - summary_height), 1.0, summary_height,
         transform=ax.transAxes,
         facecolor=SUMMARY_BG, edgecolor=BORDER_COLOR, linewidth=0.5,
         clip_on=False,
@@ -244,7 +227,7 @@ def generate_table_image(
     ax.add_patch(rect)
 
     ax.text(
-        0.03, sy - cell_h * 0.25,
+        0.03, summary_center,
         income_text,
         ha="left", va="center",
         fontsize=10, fontweight="bold",
@@ -253,7 +236,7 @@ def generate_table_image(
         transform=ax.transAxes,
     )
     ax.text(
-        0.40, sy - cell_h * 0.25,
+        0.40, summary_center,
         expense_text,
         ha="left", va="center",
         fontsize=10, fontweight="bold",
@@ -262,7 +245,7 @@ def generate_table_image(
         transform=ax.transAxes,
     )
     ax.text(
-        0.78, sy - cell_h * 0.25,
+        0.76, summary_center,
         balance_text,
         ha="left", va="center",
         fontsize=10, fontweight="bold",
@@ -273,7 +256,7 @@ def generate_table_image(
 
     if truncated > 0:
         ax.text(
-            0.5, sy - cell_h * 0.75,
+            0.5, summary_top - summary_height - cell_h * 0.4,
             f"... та ще {truncated} операцій не показано",
             ha="center", va="center",
             fontsize=8,
@@ -306,8 +289,8 @@ def _empty_table_image(period_text: str, date_range: str) -> io.BytesIO:
     """Generate a placeholder image when there are no transactions."""
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
     import matplotlib.font_manager as fm
+    import matplotlib.pyplot as plt
 
     _register_fonts(fm)
 
@@ -344,7 +327,14 @@ def _empty_table_image(period_text: str, date_range: str) -> io.BytesIO:
     )
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor(), pad_inches=0.2)
+    fig.savefig(
+        buf,
+        format="png",
+        dpi=150,
+        bbox_inches="tight",
+        facecolor=fig.get_facecolor(),
+        pad_inches=0.2,
+    )
     plt.close(fig)
     buf.seek(0)
     return buf

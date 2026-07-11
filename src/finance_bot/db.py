@@ -4,7 +4,7 @@ import asyncio
 import sqlite3
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 

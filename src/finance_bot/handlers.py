@@ -4,9 +4,15 @@ import logging
 from html import escape
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from .config import Settings
 from .domain import Currency, parse_manual_amount
@@ -32,6 +38,11 @@ from .states import CategoryStates, TransactionStates
 from .table_image import generate_table_image_from_bytes
 
 logger = logging.getLogger(__name__)
+
+
+def _table_photo(png_bytes: bytes, period: str) -> BufferedInputFile:
+    """Wrap rendered PNG bytes as a Telegram multipart upload."""
+    return BufferedInputFile(png_bytes, filename=f"finance-table-{period}.png")
 
 
 def _user_id(message_or_query: Message | CallbackQuery) -> int:
@@ -135,13 +146,16 @@ def create_router(service: FinanceService, settings: Settings) -> Router:
             )
             await bot.send_photo(
                 message.chat.id,
-                photo=png_bytes,
+                photo=_table_photo(png_bytes, "week"),
                 caption="Таблиця за цей тиждень",
                 reply_markup=_table_keyboard("week"),
             )
             await progress.delete()
         except Exception:
-            logger.exception("Could not generate table", extra={"user_id": _user_id(message)})
+            logger.exception(
+                "Could not generate or send table",
+                extra={"user_id": _user_id(message)},
+            )
             try:
                 await progress.edit_text("Не вдалося згенерувати таблицю. Спробуй трохи пізніше.")
             except Exception:
@@ -472,18 +486,19 @@ def create_router(service: FinanceService, settings: Settings) -> Router:
             png_bytes = generate_table_image_from_bytes(
                 transactions, period=period, start=start, end=end  # type: ignore[arg-type]
             )
+            photo = _table_photo(png_bytes, period)
             caption = "Таблиця за цей тиждень" if period == "week" else "Таблиця за цей місяць"
             if isinstance(query.message, Message) and query.message.photo:
                 await bot.send_photo(
-                    query.chat.id,
-                    photo=png_bytes,
+                    query.message.chat.id,
+                    photo=photo,
                     caption=caption,
                     reply_markup=_table_keyboard(period),
                 )
                 await query.message.delete()
             else:
                 await query.message.answer_photo(
-                    photo=png_bytes,
+                    photo=photo,
                     caption=caption,
                     reply_markup=_table_keyboard(period),
                 )
@@ -499,8 +514,8 @@ def create_router(service: FinanceService, settings: Settings) -> Router:
 
 
 def _table_keyboard(active: str = "week") -> InlineKeyboardMarkup:
-    week = "Тиждень" if active != "week" else "Тиждень"
-    month = "Місяць" if active != "month" else "Місяць"
+    week = "✓ Тиждень" if active == "week" else "Тиждень"
+    month = "✓ Місяць" if active == "month" else "Місяць"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
