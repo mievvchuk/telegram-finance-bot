@@ -15,3 +15,6 @@ docker-compose.yml
 .vscode
 .idea
 *.log
+*.tar
+*.tar.gz
+*.zip
