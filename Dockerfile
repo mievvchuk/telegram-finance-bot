@@ -29,6 +29,4 @@ COPY --from=builder /wheels /wheels
 RUN python -m pip install /wheels/*.whl \
     && rm -rf /wheels
 
-USER bot
-
 CMD ["finance-bot"]
